@@ -1,0 +1,74 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/webhooks/clerk",
+      "dest": "/server.js",
+      "methods": ["POST"]
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "/server.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/server.js"
+    }
+  ],
+  "functions": {
+    "server.js": {
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "MONGODB_URI": "@mongodb_uri",
+    "CLERK_PUBLISHABLE_KEY": "@clerk_publishable_key",
+    "CLERK_SECRET_KEY": "@clerk_secret_key",
+    "CLERK_WEBHOOK_SECRET": "@clerk_webhook_secret",
+    "NODE_ENV": "production"
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, X-Requested-With"
+        },
+        {
+          "key": "Access-Control-Max-Age",
+          "value": "86400"
+        }
+      ]
+    },
+    {
+      "source": "/api/webhooks/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://api.clerk.dev"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/server.js"
+    }
+  ]
+}
