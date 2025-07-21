@@ -9,19 +9,18 @@
       }
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/webhooks/clerk",
-      "dest": "/server.js",
-      "methods": ["POST"]
+      "source": "/api/webhooks/clerk",
+      "destination": "/server.js"
     },
     {
-      "src": "/api/(.*)",
-      "dest": "/server.js"
+      "source": "/api/(.*)",
+      "destination": "/server.js"
     },
     {
-      "src": "/(.*)",
-      "dest": "/server.js"
+      "source": "/(.*)",
+      "destination": "/server.js"
     }
   ],
   "env": {
