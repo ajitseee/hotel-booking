@@ -9,9 +9,6 @@ import clerkWebhooks from './controllers/clerkWebhooks.js'
 // Load environment variables
 dotenv.config()
 
-// Connect to database
-connectDB()
-
 const app = express()
 
 // Middleware
@@ -28,6 +25,39 @@ app.use(express.urlencoded({ extended: true }))
 app.use(clerkMiddleware())
 
 app.get('/', (req, res) => res.send("API IS WORKING FINE"))
+app.get('/api', (req, res) => res.send("API IS WORKING FINE"))
 
+// Connect to database only when needed
+let isConnected = false;
+
+async function connectToDatabase() {
+  if (isConnected) {
+    return;
+  }
+  
+  try {
+    await connectDB();
+    isConnected = true;
+  } catch (error) {
+    console.error('Database connection failed:', error);
+    throw error;
+  }
+}
+
+// For Vercel serverless functions
+export default async function handler(req, res) {
+  try {
+    await connectToDatabase();
+    return app(req, res);
+  } catch (error) {
+    console.error('Handler error:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+}
+
+// For local development
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+if (process.env.NODE_ENV !== 'production') {
+  connectDB();
+  app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+}
