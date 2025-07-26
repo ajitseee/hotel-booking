@@ -6,40 +6,149 @@ import dotenv from "dotenv"
 // Load environment variables
 dotenv.config()
 
+// Environment validation
+console.log('Environment check:');
+console.log('- NODE_ENV:', process.env.NODE_ENV);
+console.log('- MONGODB_URI:', process.env.MONGODB_URI ? 'Set' : 'Missing');
+console.log('- CLERK_WEBHOOK_SECRET:', process.env.CLERK_WEBHOOK_SECRET ? 'Set' : 'Missing');
+
 // Database connection
 let isConnected = false;
 
 async function connectToDatabase() {
   if (isConnected) {
+    console.log('Using existing database connection');
     return;
   }
   
   try {
     if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI is not defined');
+      throw new Error('MONGODB_URI environment variable is not defined');
     }
     
-    await mongoose.connect(`${process.env.MONGODB_URI}/hotel-booking`);
+    console.log('Connecting to MongoDB...');
+    await mongoose.connect(`${process.env.MONGODB_URI}/hotel-booking`, {
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+      socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+    });
+    
     isConnected = true;
     console.log('MongoDB connected successfully');
   } catch (error) {
     console.error('Database connection failed:', error);
+    console.error('MongoDB URI (redacted):', process.env.MONGODB_URI ? 'Set' : 'Not set');
     throw error;
   }
 }
 
-// User Schema (simplified for serverless)
+// User Schema (comprehensive for serverless)
 const userSchema = new mongoose.Schema({
-  clerkId: { type: String, required: true, unique: true },
-  email: { type: String, required: true },
-  firstName: String,
-  lastName: String,
-  role: { type: String, enum: ['customer', 'hotelOwner'], default: 'customer' },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+  // Basic Information
+  name: { 
+    type: String, 
+    required: true,
+    trim: true
+  },
+  email: { 
+    type: String, 
+    required: true, 
+    unique: true,
+    lowercase: true,
+    trim: true
+  },
+  
+  // Clerk Integration
+  clerkId: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  
+  // User Role Management
+  role: {
+    type: String,
+    enum: ['customer', 'hotel_owner'],
+    required: true,
+    default: 'customer'
+  },
+  userType: {
+    type: String,
+    enum: ['customer', 'owner'],
+    required: true,
+    default: 'customer'
+  },
+  
+  // Profile Information
+  firstName: {
+    type: String,
+    trim: true
+  },
+  lastName: {
+    type: String,
+    trim: true
+  },
+  phone: {
+    type: String,
+    trim: true
+  },
+  avatar: {
+    type: String,
+    default: null
+  },
+  
+  // Account Status
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  isEmailVerified: {
+    type: Boolean,
+    default: false
+  },
+  isPhoneVerified: {
+    type: Boolean,
+    default: false
+  },
+  
+  // Activity Tracking
+  lastLogin: {
+    type: Date,
+    default: Date.now
+  },
+  loginCount: {
+    type: Number,
+    default: 0
+  }
+}, {
+  timestamps: true
 });
 
-const User = mongoose.models.User || mongoose.model('User', userSchema);
+// Add pre-save middleware to ensure consistency
+userSchema.pre('save', function(next) {
+  // Sync role and userType
+  if (this.role === 'hotel_owner') {
+    this.userType = 'owner';
+  } else if (this.role === 'customer') {
+    this.userType = 'customer';
+  }
+  
+  // Set default name if firstName/lastName provided
+  if (this.firstName && this.lastName && !this.name) {
+    this.name = `${this.firstName} ${this.lastName}`;
+  }
+  
+  next();
+});
+
+// Create or get existing model
+let User;
+try {
+  User = mongoose.models.User || mongoose.model('User', userSchema);
+  console.log('User model initialized successfully');
+} catch (error) {
+  console.error('Error initializing User model:', error);
+  throw error;
+}
 
 // Express app setup
 const app = express()
@@ -50,54 +159,99 @@ app.use(cors())
 // Webhook endpoint (before express.json())
 app.post('/api/webhooks/clerk', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
+    console.log('Webhook received, connecting to database...');
     await connectToDatabase();
+    console.log('Database connected, processing webhook...');
     
-    // Simple webhook processing without signature verification for now
+    // Parse webhook payload
     const payload = JSON.parse(req.body.toString());
     const { type, data } = payload;
     
-    console.log('Webhook received:', type, data);
+    console.log('Webhook event type:', type);
+    console.log('Webhook data:', JSON.stringify(data, null, 2));
     
     if (type === 'user.created') {
-      const { id, email_addresses, first_name, last_name, public_metadata } = data;
-      
-      const newUser = new User({
-        clerkId: id,
-        email: email_addresses[0]?.email_address,
-        firstName: first_name,
-        lastName: last_name,
-        role: public_metadata?.role || 'customer'
-      });
-      
-      await newUser.save();
-      console.log('User created in database:', newUser);
+      try {
+        // Extract role from public metadata
+        const userRole = data.public_metadata?.role || data.public_metadata?.userType || 'customer';
+        
+        const userData = {
+          clerkId: data.id,
+          email: data.email_addresses[0]?.email_address,
+          firstName: data.first_name || '',
+          lastName: data.last_name || '',
+          name: `${data.first_name || ''} ${data.last_name || ''}`.trim() || data.username || 'User',
+          phone: data.phone_numbers?.[0]?.phone_number || '',
+          avatar: data.image_url || data.profile_image_url,
+          role: userRole,
+          userType: userRole === 'hotel_owner' ? 'owner' : 'customer',
+          isEmailVerified: data.email_addresses[0]?.verification?.status === 'verified',
+          isPhoneVerified: data.phone_numbers?.[0]?.verification?.status === 'verified',
+          lastLogin: new Date(),
+          loginCount: 1
+        };
+        
+        console.log('Creating user with data:', userData);
+        const newUser = new User(userData);
+        await newUser.save();
+        console.log('User created successfully:', newUser.email);
+      } catch (userError) {
+        console.error('Error creating user:', userError);
+        // Don't throw, just log the error and continue
+      }
     }
     
     if (type === 'user.updated') {
-      const { id, email_addresses, first_name, last_name, public_metadata } = data;
-      
-      await User.findOneAndUpdate(
-        { clerkId: id },
-        {
-          email: email_addresses[0]?.email_address,
-          firstName: first_name,
-          lastName: last_name,
-          role: public_metadata?.role || 'customer',
-          updatedAt: new Date()
-        }
-      );
-      console.log('User updated in database');
+      try {
+        const userRole = data.public_metadata?.role || data.public_metadata?.userType || 'customer';
+        
+        const updateData = {
+          email: data.email_addresses[0]?.email_address,
+          firstName: data.first_name || '',
+          lastName: data.last_name || '',
+          name: `${data.first_name || ''} ${data.last_name || ''}`.trim() || data.username || 'User',
+          phone: data.phone_numbers?.[0]?.phone_number || '',
+          avatar: data.image_url || data.profile_image_url,
+          role: userRole,
+          userType: userRole === 'hotel_owner' ? 'owner' : 'customer',
+          isEmailVerified: data.email_addresses[0]?.verification?.status === 'verified',
+          isPhoneVerified: data.phone_numbers?.[0]?.verification?.status === 'verified'
+        };
+        
+        await User.findOneAndUpdate(
+          { clerkId: data.id },
+          updateData,
+          { new: true, upsert: true }
+        );
+        console.log('User updated successfully');
+      } catch (updateError) {
+        console.error('Error updating user:', updateError);
+      }
     }
     
     if (type === 'user.deleted') {
-      await User.findOneAndDelete({ clerkId: data.id });
-      console.log('User deleted from database');
+      try {
+        await User.findOneAndDelete({ clerkId: data.id });
+        console.log('User deleted successfully:', data.id);
+      } catch (deleteError) {
+        console.error('Error deleting user:', deleteError);
+      }
     }
     
-    res.status(200).json({ message: 'Webhook processed successfully' });
+    res.status(200).json({ 
+      success: true,
+      message: 'Webhook processed successfully',
+      type: type
+    });
   } catch (error) {
-    console.error('Webhook error:', error);
-    res.status(500).json({ error: 'Webhook processing failed', message: error.message });
+    console.error('Webhook processing error:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      success: false,
+      error: 'Webhook processing failed', 
+      message: error.message,
+      type: 'webhook_error'
+    });
   }
 })
 
@@ -109,27 +263,61 @@ app.use(express.urlencoded({ extended: true }))
 app.get('/', (req, res) => res.json({
   message: "Hotel Booking API is Working Fine!",
   timestamp: new Date().toISOString(),
-  environment: "production"
+  environment: "production",
+  status: "healthy"
 }))
 
 app.get('/api', (req, res) => res.json({
   message: "API endpoint is working!",
-  timestamp: new Date().toISOString()
+  timestamp: new Date().toISOString(),
+  status: "healthy"
 }))
+
+app.get('/api/health', async (req, res) => {
+  try {
+    await connectToDatabase();
+    res.json({
+      status: "healthy",
+      database: "connected",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: "unhealthy",
+      database: "disconnected",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+})
 
 app.get('/api/test', (req, res) => res.json({
   message: "Test endpoint working!",
-  timestamp: new Date().toISOString()
+  timestamp: new Date().toISOString(),
+  status: "healthy"
 }))
 
 // Get all users (for testing)
 app.get('/api/users', async (req, res) => {
   try {
+    console.log('Fetching users...');
     await connectToDatabase();
-    const users = await User.find().select('-__v');
-    res.json({ users, count: users.length });
+    const users = await User.find().select('-__v').limit(50); // Limit to 50 users
+    console.log(`Found ${users.length} users`);
+    res.json({ 
+      success: true,
+      users, 
+      count: users.length,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching users:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 })
 
@@ -144,13 +332,42 @@ app.use('*', (req, res) => {
 
 export default async function handler(req, res) {
   try {
-    return app(req, res);
+    console.log(`${req.method} ${req.url} - Processing request`);
+    
+    // Add request timeout
+    const timeout = setTimeout(() => {
+      if (!res.headersSent) {
+        console.error('Request timeout');
+        res.status(504).json({ 
+          error: 'Request timeout',
+          message: 'The request took too long to process',
+          timestamp: new Date().toISOString()
+        });
+      }
+    }, 25000); // 25 second timeout
+    
+    // Process the request
+    await new Promise((resolve, reject) => {
+      app(req, res, (err) => {
+        clearTimeout(timeout);
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    
+    clearTimeout(timeout);
   } catch (error) {
     console.error('Handler error:', error);
-    return res.status(500).json({ 
-      error: 'Internal Server Error',
-      message: error.message,
-      timestamp: new Date().toISOString()
-    });
+    console.error('Error stack:', error.stack);
+    
+    if (!res.headersSent) {
+      return res.status(500).json({ 
+        success: false,
+        error: 'Internal Server Error',
+        message: error.message,
+        timestamp: new Date().toISOString(),
+        type: 'handler_error'
+      });
+    }
   }
 }

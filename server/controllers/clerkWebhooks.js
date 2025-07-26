@@ -91,6 +91,7 @@ const handleUserCreated = async (data) => {
 };
 
 // Handle user updates
+
 const handleUserUpdated = async (data) => {
     try {
         const userRole = data.public_metadata?.role || data.public_metadata?.userType || 'customer';
