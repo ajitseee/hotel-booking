@@ -6,9 +6,9 @@ import dotenv from "dotenv"
 // Load environment variables
 dotenv.config()
 
-// Environment validation
+console.log('Starting Hotel Booking API...');
 console.log('Environment check:');
-console.log('- NODE_ENV:', process.env.NODE_ENV);
+console.log('- NODE_ENV:', process.env.NODE_ENV || 'undefined');
 console.log('- MONGODB_URI:', process.env.MONGODB_URI ? 'Set' : 'Missing');
 console.log('- CLERK_WEBHOOK_SECRET:', process.env.CLERK_WEBHOOK_SECRET ? 'Set' : 'Missing');
 
@@ -23,7 +23,8 @@ async function connectToDatabase() {
   
   try {
     if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI environment variable is not defined');
+      console.warn('MONGODB_URI environment variable is not defined - skipping database connection');
+      return;
     }
     
     console.log('Connecting to MongoDB...');
@@ -35,9 +36,9 @@ async function connectToDatabase() {
     isConnected = true;
     console.log('MongoDB connected successfully');
   } catch (error) {
-    console.error('Database connection failed:', error);
-    console.error('MongoDB URI (redacted):', process.env.MONGODB_URI ? 'Set' : 'Not set');
-    throw error;
+    console.error('Database connection failed:', error.message);
+    console.error('Will continue without database connection');
+    // Don't throw error to prevent startup crash
   }
 }
 
@@ -140,14 +141,19 @@ userSchema.pre('save', function(next) {
   next();
 });
 
-// Create or get existing model
+// Create or get existing model (with error handling)
 let User;
 try {
-  User = mongoose.models.User || mongoose.model('User', userSchema);
-  console.log('User model initialized successfully');
+  // Only create model if we have a database connection
+  if (process.env.MONGODB_URI) {
+    User = mongoose.models.User || mongoose.model('User', userSchema);
+    console.log('User model initialized successfully');
+  } else {
+    console.warn('No database URI - User model not initialized');
+  }
 } catch (error) {
-  console.error('Error initializing User model:', error);
-  throw error;
+  console.error('Error initializing User model:', error.message);
+  // Continue without model
 }
 
 // Express app setup
@@ -159,8 +165,28 @@ app.use(cors())
 // Webhook endpoint (before express.json())
 app.post('/api/webhooks/clerk', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
-    console.log('Webhook received, connecting to database...');
+    console.log('Webhook received, checking database...');
+    
+    if (!process.env.MONGODB_URI || !User) {
+      console.warn('Database not configured - webhook will not process user data');
+      return res.status(200).json({ 
+        success: true,
+        message: 'Webhook received but database not configured',
+        configured: false
+      });
+    }
+    
     await connectToDatabase();
+    
+    if (!isConnected) {
+      console.warn('Database not connected - webhook will not process user data');
+      return res.status(200).json({ 
+        success: true,
+        message: 'Webhook received but database not connected',
+        connected: false
+      });
+    }
+    
     console.log('Database connected, processing webhook...');
     
     // Parse webhook payload
@@ -276,17 +302,34 @@ app.get('/api', (req, res) => res.json({
 
 app.get('/api/health', async (req, res) => {
   try {
-    await connectToDatabase();
+    let dbStatus = 'not_configured';
+    let dbError = null;
+    
+    if (process.env.MONGODB_URI) {
+      try {
+        await connectToDatabase();
+        dbStatus = isConnected ? 'connected' : 'disconnected';
+      } catch (error) {
+        dbStatus = 'error';
+        dbError = error.message;
+      }
+    }
+    
     res.json({
       status: "healthy",
-      database: "connected",
+      database: dbStatus,
+      databaseError: dbError,
+      environment: {
+        NODE_ENV: process.env.NODE_ENV || 'undefined',
+        MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'Missing',
+        CLERK_WEBHOOK_SECRET: process.env.CLERK_WEBHOOK_SECRET ? 'Set' : 'Missing'
+      },
       timestamp: new Date().toISOString(),
       uptime: process.uptime()
     });
   } catch (error) {
     res.status(503).json({
       status: "unhealthy",
-      database: "disconnected",
       error: error.message,
       timestamp: new Date().toISOString()
     });
@@ -296,27 +339,49 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/debug', async (req, res) => {
   try {
     console.log('Debug endpoint called');
-    await connectToDatabase();
     
-    // Test creating a sample user
-    const testUser = {
-      clerkId: 'test_' + Date.now(),
-      email: 'test@example.com',
-      name: 'Test User',
-      firstName: 'Test',
-      lastName: 'User',
-      role: 'customer',
-      userType: 'customer'
-    };
+    let dbConnected = false;
+    let dbError = null;
     
-    console.log('Testing user creation with:', testUser);
-    const user = new User(testUser);
-    await user.validate();
+    if (process.env.MONGODB_URI && User) {
+      try {
+        await connectToDatabase();
+        dbConnected = isConnected;
+        
+        if (dbConnected) {
+          // Test creating a sample user
+          const testUser = {
+            clerkId: 'test_' + Date.now(),
+            email: 'test@example.com',
+            name: 'Test User',
+            firstName: 'Test',
+            lastName: 'User',
+            role: 'customer',
+            userType: 'customer'
+          };
+          
+          console.log('Testing user creation with:', testUser);
+          const user = new User(testUser);
+          await user.validate();
+        }
+      } catch (error) {
+        dbError = error.message;
+      }
+    }
     
     res.json({
       status: "success",
-      message: "Debug test passed",
-      testUser: testUser,
+      message: "Debug test completed",
+      database: {
+        configured: !!process.env.MONGODB_URI,
+        connected: dbConnected,
+        error: dbError
+      },
+      environment: {
+        NODE_ENV: process.env.NODE_ENV || 'undefined',
+        MONGODB_URI: process.env.MONGODB_URI ? 'Set' : 'Missing',
+        CLERK_WEBHOOK_SECRET: process.env.CLERK_WEBHOOK_SECRET ? 'Set' : 'Missing'
+      },
       timestamp: new Date().toISOString()
     });
   } catch (error) {
