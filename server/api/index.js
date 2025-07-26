@@ -293,6 +293,43 @@ app.get('/api/health', async (req, res) => {
   }
 })
 
+app.get('/api/debug', async (req, res) => {
+  try {
+    console.log('Debug endpoint called');
+    await connectToDatabase();
+    
+    // Test creating a sample user
+    const testUser = {
+      clerkId: 'test_' + Date.now(),
+      email: 'test@example.com',
+      name: 'Test User',
+      firstName: 'Test',
+      lastName: 'User',
+      role: 'customer',
+      userType: 'customer'
+    };
+    
+    console.log('Testing user creation with:', testUser);
+    const user = new User(testUser);
+    await user.validate();
+    
+    res.json({
+      status: "success",
+      message: "Debug test passed",
+      testUser: testUser,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({
+      status: "error",
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+  }
+})
+
 app.get('/api/test', (req, res) => res.json({
   message: "Test endpoint working!",
   timestamp: new Date().toISOString(),
