@@ -264,7 +264,8 @@ app.get('/', (req, res) => res.json({
   message: "Hotel Booking API is Working Fine!",
   timestamp: new Date().toISOString(),
   environment: "production",
-  status: "healthy"
+  status: "healthy",
+  version: "v1.1"
 }))
 
 app.get('/api', (req, res) => res.json({
