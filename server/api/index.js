@@ -11,6 +11,7 @@ console.log('Environment check:');
 console.log('- NODE_ENV:', process.env.NODE_ENV || 'undefined');
 console.log('- MONGODB_URI:', process.env.MONGODB_URI ? 'Set' : 'Missing');
 console.log('- CLERK_WEBHOOK_SECRET:', process.env.CLERK_WEBHOOK_SECRET ? 'Set' : 'Missing');
+console.log('- Deploy timestamp:', new Date().toISOString());
 
 // Database connection
 let isConnected = false;
@@ -291,7 +292,7 @@ app.get('/', (req, res) => res.json({
   timestamp: new Date().toISOString(),
   environment: "production",
   status: "healthy",
-  version: "v1.1"
+  version: "v1.2"
 }))
 
 app.get('/api', (req, res) => res.json({
