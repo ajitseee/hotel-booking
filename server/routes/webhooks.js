@@ -6,10 +6,18 @@ const router = express.Router();
 
 // POST /api/webhooks/clerk - Handle Clerk webhooks
 router.post('/clerk', express.raw({ type: 'application/json' }), async (req, res) => {
+  console.log('🚀 Webhook received!');
+  console.log('Headers:', req.headers);
+  console.log('Body type:', typeof req.body);
+  console.log('Body length:', req.body?.length);
+  
   try {
     const WEBHOOK_SECRET = process.env.CLERK_WEBHOOK_SECRET;
     
+    console.log('Webhook secret exists:', !!WEBHOOK_SECRET);
+    
     if (!WEBHOOK_SECRET) {
+      console.error('❌ CLERK_WEBHOOK_SECRET not found');
       throw new Error('Please add CLERK_WEBHOOK_SECRET from Clerk Dashboard to .env');
     }
 
@@ -54,10 +62,12 @@ router.post('/clerk', express.raw({ type: 'application/json' }), async (req, res
     const eventType = evt.type;
     const userData = evt.data;
 
-    console.log(`Webhook received: ${eventType}`);
+    console.log(`🎯 Webhook received: ${eventType}`);
+    console.log('📊 User data:', JSON.stringify(userData, null, 2));
 
     switch (eventType) {
       case 'user.created':
+        console.log('👤 Processing user.created event');
         await handleUserCreated(userData);
         break;
       case 'user.updated':
@@ -88,6 +98,10 @@ router.post('/clerk', express.raw({ type: 'application/json' }), async (req, res
 // Helper function to handle user creation
 async function handleUserCreated(userData) {
   try {
+    console.log('🔄 Starting user creation process...');
+    console.log('User data ID:', userData.id);
+    console.log('User email:', userData.email_addresses?.[0]?.email_address);
+    
     const user = new User({
       clerkId: userData.id,
       email: userData.email_addresses[0]?.email_address,
@@ -98,10 +112,11 @@ async function handleUserCreated(userData) {
       role: 'customer' // Default role
     });
 
+    console.log('💾 Saving user to database...');
     await user.save();
     console.log(`✅ User created in database: ${user.email}`);
   } catch (error) {
-    console.error('Error creating user:', error);
+    console.error('❌ Error creating user:', error);
     throw error;
   }
 }
