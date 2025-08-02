@@ -114,11 +114,29 @@ async function handleUserCreated(userData) {
     console.log('User data ID:', userData.id);
     console.log('User email:', userData.email_addresses?.[0]?.email_address);
     
-    // Check if user already exists
+    // Check if user already exists by clerkId
     const existingUser = await User.findOne({ clerkId: userData.id });
     if (existingUser) {
-      console.log('⚠️ User already exists, skipping creation');
-      return;
+      console.log('⚠️ User already exists with clerkId, skipping creation');
+      console.log('Existing user:', existingUser.email);
+      return existingUser;
+    }
+    
+    // Also check by email to prevent email duplicates
+    const email = userData.email_addresses?.[0]?.email_address;
+    if (email) {
+      const existingEmailUser = await User.findOne({ email: email });
+      if (existingEmailUser) {
+        console.log('⚠️ User already exists with this email, updating clerkId');
+        existingEmailUser.clerkId = userData.id;
+        existingEmailUser.firstName = userData.first_name || existingEmailUser.firstName;
+        existingEmailUser.lastName = userData.last_name || existingEmailUser.lastName;
+        existingEmailUser.profileImage = userData.profile_image_url || existingEmailUser.profileImage;
+        existingEmailUser.phone = userData.phone_numbers?.[0]?.phone_number || existingEmailUser.phone;
+        await existingEmailUser.save();
+        console.log('✅ Updated existing user with new clerkId');
+        return existingEmailUser;
+      }
     }
     
     const user = new User({
@@ -138,9 +156,35 @@ async function handleUserCreated(userData) {
     return savedUser;
   } catch (error) {
     console.error('❌ Error creating user:', error);
+    
+    // Handle duplicate key errors gracefully
     if (error.code === 11000) {
-      console.error('❌ Duplicate key error - user may already exist');
+      console.error('❌ Duplicate key error details:', error.keyPattern);
+      console.error('❌ Duplicate key value:', error.keyValue);
+      
+      // If it's a duplicate, try to find and return the existing user
+      try {
+        const existingUser = await User.findOne({ 
+          $or: [
+            { clerkId: userData.id },
+            { email: userData.email_addresses?.[0]?.email_address }
+          ]
+        });
+        
+        if (existingUser) {
+          console.log('✅ Found existing user, returning that instead');
+          return existingUser;
+        }
+      } catch (findError) {
+        console.error('❌ Error finding existing user:', findError);
+      }
+      
+      // Don't throw error for duplicates, just log it
+      console.log('⚠️ User creation skipped due to duplicate');
+      return null;
     }
+    
+    // For other errors, still throw
     throw error;
   }
 }
