@@ -5,20 +5,23 @@ import User from '../models/User.js';
 const router = express.Router();
 
 // POST /api/webhooks/clerk - Handle Clerk webhooks
-router.post('/clerk', express.raw({ type: 'application/json' }), async (req, res) => {
+router.post('/clerk', async (req, res) => {
   console.log('🚀 Webhook received!');
-  console.log('Headers:', req.headers);
+  console.log('Headers:', Object.keys(req.headers));
   console.log('Body type:', typeof req.body);
-  console.log('Body length:', req.body?.length);
   
   try {
     const WEBHOOK_SECRET = process.env.CLERK_WEBHOOK_SECRET;
     
     console.log('Webhook secret exists:', !!WEBHOOK_SECRET);
+    console.log('Webhook secret preview:', WEBHOOK_SECRET ? WEBHOOK_SECRET.substring(0, 10) + '...' : 'NOT SET');
     
     if (!WEBHOOK_SECRET) {
       console.error('❌ CLERK_WEBHOOK_SECRET not found');
-      throw new Error('Please add CLERK_WEBHOOK_SECRET from Clerk Dashboard to .env');
+      return res.status(500).json({
+        success: false,
+        message: 'Webhook secret not configured'
+      });
     }
 
     // Get the headers
@@ -30,8 +33,14 @@ router.post('/clerk', express.raw({ type: 'application/json' }), async (req, res
     const svix_timestamp = headers['svix-timestamp'];
     const svix_signature = headers['svix-signature'];
 
+    console.log('Svix headers check:');
+    console.log('- svix-id:', !!svix_id);
+    console.log('- svix-timestamp:', !!svix_timestamp);
+    console.log('- svix-signature:', !!svix_signature);
+
     // If there are no headers, error out
     if (!svix_id || !svix_timestamp || !svix_signature) {
+      console.error('❌ Missing Svix headers');
       return res.status(400).json({
         success: false,
         message: 'Error occurred -- no svix headers'
@@ -45,16 +54,19 @@ router.post('/clerk', express.raw({ type: 'application/json' }), async (req, res
 
     // Verify the payload with the headers
     try {
+      console.log('🔍 Verifying webhook signature...');
       evt = wh.verify(payload, {
         'svix-id': svix_id,
         'svix-timestamp': svix_timestamp,
         'svix-signature': svix_signature,
       });
+      console.log('✅ Webhook signature verified');
     } catch (err) {
-      console.error('Error verifying webhook:', err);
+      console.error('❌ Error verifying webhook:', err.message);
       return res.status(400).json({
         success: false,
-        message: 'Error occurred during verification'
+        message: 'Error occurred during verification',
+        error: err.message
       });
     }
 
@@ -102,6 +114,13 @@ async function handleUserCreated(userData) {
     console.log('User data ID:', userData.id);
     console.log('User email:', userData.email_addresses?.[0]?.email_address);
     
+    // Check if user already exists
+    const existingUser = await User.findOne({ clerkId: userData.id });
+    if (existingUser) {
+      console.log('⚠️ User already exists, skipping creation');
+      return;
+    }
+    
     const user = new User({
       clerkId: userData.id,
       email: userData.email_addresses[0]?.email_address,
@@ -113,10 +132,15 @@ async function handleUserCreated(userData) {
     });
 
     console.log('💾 Saving user to database...');
-    await user.save();
-    console.log(`✅ User created in database: ${user.email}`);
+    const savedUser = await user.save();
+    console.log(`✅ User created in database: ${savedUser.email} (ID: ${savedUser._id})`);
+    
+    return savedUser;
   } catch (error) {
     console.error('❌ Error creating user:', error);
+    if (error.code === 11000) {
+      console.error('❌ Duplicate key error - user may already exist');
+    }
     throw error;
   }
 }
