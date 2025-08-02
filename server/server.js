@@ -22,6 +22,8 @@ import webhookRoutes from './routes/webhooks.js';
 // Create Express app
 const app = express();
 
+console.log('🚀 Hotel Booking API Server Starting...');
+
 // Connect to database
 connectDB();
 
